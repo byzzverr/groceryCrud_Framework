@@ -1,0 +1,246 @@
+<?php
+
+class App_model extends CI_Model { 
+
+   public function __construct()
+   {
+      parent::__construct();
+   }
+
+
+  function save_raw_data($data){
+    $this->db->query("INSERT INTO `app_raw_data` (raw_data, createdate) VALUES (?,NOW())", array($data));
+  }
+
+	function insert_order($customer_id,$order_info){
+
+    //check if payment type is Available
+    if(!$this->payment_type_available($order_info['payment_type'])){
+      return array('status' => 'fail', 'message' => 'The payment option you selected is not Available.');
+    }
+
+    $account_order = false;
+    //if this should come off their account
+    if($order_info['payment_type'] == 4 || $order_info['payment_type'] == 'Account'){
+      $balance = $this->financial_model->get_balance($customer_id);
+
+      $order_cost = 0;
+      foreach ($order_info['items'] as $item_key => $item) {
+        $order_cost = $order_cost+($item['price']*$item['quantity']);
+      }
+      if($order_cost > $balance){
+        return array('status' => 'fail', 'message' => 'Insuficcient funds in your account.');
+      }else{
+        $account_order = true;
+      }
+    }
+
+    $this->db->query("INSERT INTO `orders` (customer_id, payment_type, Status, createdate) VALUES (?,?,'Order Placed',NOW())", array($customer_id,$order_info['payment_type']));
+    $order_id = $this->db->insert_id();
+    $total_rewards = 0;
+    //loop through order items
+    foreach ($order_info['items'] as $key => $value) {
+
+      $this->db->query("INSERT INTO `order_items` (order_id, product_id, price, quantity) VALUES (?,?,?,?)", array($order_id,$value['product_id'],$value['price'],$value['quantity']));
+      $order_item_id = $this->db->insert_id();
+      $total_rewards = $value['rewards'] + $total_rewards;
+     // if airtime products
+      if($this->is_airtime_product($value['product_id'])){
+        
+        $this->financial_model->add_to_customer_account('airtime', $customer_id, $value['price']*$value['quantity'], $order_item_id);
+      }
+    }
+    if($account_order){
+      $this->financial_model->remove_from_customer_account('account', $customer_id, $order_cost, $order_id);
+    }
+    $this->db->query("INSERT INTO `rewards` (customer_id, reward, reason, createdate) VALUES (?,?,?,NOW())", array($customer_id, $total_rewards, $order_id));
+    return array('status' => 'success', 'message' => $order_id);
+	}
+
+  function is_airtime_product($product_id){
+
+    $query = $this->db->query("SELECT a.category_id FROM `products` a, categories b where a.id = ? and a.category_id = b.id and b. name like '%airtime%'", array($product_id));
+    if($query->num_rows() == 1){
+      return true;
+    }
+    return false;
+
+  }
+
+  function get_user($user_id){
+      $query = $this->db->query("SELECT * FROM `aauth_users` WHERE id = $user_id");
+      return $query->row();
+  }
+
+  function payment_type_available($payment_type){
+    $query = $this->db->query("SELECT * FROM `payment_types` where status = 'Available' and id = ?", array($payment_type));
+    if($query->num_rows() == 1){
+      return true;
+    }
+    return false;
+  }
+
+  function get_payment_types(){
+      $query = $this->db->query("SELECT * FROM `payment_types`");
+      return $query->result_array();
+  }
+
+  function get_news_list(){
+      $query = $this->db->query("SELECT * FROM `news`");
+      return $query->result_array();
+  }
+
+  function get_news_item($news_id){
+      $query = $this->db->query("SELECT * FROM `news` where id = ?", array($news_id));
+      return $query->row_array();
+  }
+
+  function get_customer_info($id){
+      $query = $this->db->query("SELECT * FROM `customers` WHERE id = ?", array($id));
+      return $query->row_array();
+  }
+
+  function get_orders_list($customer_id){
+      $query = $this->db->query("SELECT * FROM `orders` WHERE customer_id = ?", array($customer_id));
+      return $query->result_array();
+  }
+
+  function get_product_list($customer_type, $category_id){
+     $query =  $this->db->query("SELECT * FROM `products` where category_id = ? and customer_type = ?", array($category_id, $customer_type));
+      return $query->result_array();
+  }  
+
+  function get_user_images($user_id, $all=''){
+
+      if($all != ''){
+
+          $prod_img_q = "SELECT id, picture FROM `products` WHERE picture != ''";
+          $cat_img_q = "SELECT id, icon FROM `categories` WHERE icon != ''";
+
+      }else{
+
+          $user = $this->user_model->get_user($user_id);
+
+          $prod_img_q = "SELECT id, picture FROM `products` WHERE picture != '' AND editdate >= '".$user->last_login."' OR createdate >= '".$user->last_login."'";
+          $cat_img_q = "SELECT id, icon FROM `categories` WHERE icon != '' AND editdate >= '".$user->last_login."' OR createdate >= '".$user->last_login."'";
+      }
+      
+      $images = array();
+
+      $query =  $this->db->query($prod_img_q);
+      $product_images = $query->result_array();
+
+      foreach ($product_images as $key => $image) {
+        $images[] = array(
+          'id' => $image['id'],
+          'type' => 'product',
+          'filename' => $image['picture']
+          );
+      }
+      
+      $query2 =  $this->db->query($cat_img_q);
+      $category_images = $query2->result_array();
+
+      foreach ($category_images as $key => $image) {
+        $images[] = array(
+          'id' => $image['id'],
+          'type' => 'category',
+          'filename' => $image['icon']
+          );
+      }
+
+      return $images;
+  }
+
+  function get_category_list($parent_id){
+      $query =  $this->db->query("SELECT * FROM `categories` WHERE parent_id = ?", array($parent_id));
+      return $query->result_array();
+  }
+
+/*  function get_category_list($parent_id, $crumbs=array()) {
+      $query = $this->db->query("SELECT * FROM  `categories` WHERE id = ?", array($parent_id));
+      $row = $query->row_array();
+      $crumbs[] = $row;
+      print_r($crumbs)
+      if($row['parent_id'] == 0 || $row['parent_id'] == '') {
+          krsort($crumbs); //sort array in descending order
+          return $crumbs;
+      } else {
+          $this->get_category_list($row['parent_id'], $crumbs);
+      }
+  }
+*/
+
+  function xml_parents($parent_array=''){
+
+        if(is_array($parent_array) && isset($parent_array['parent'])){
+          $query =  $this->db->query("SELECT * FROM `categories` WHERE id = ?", array($parent_id));
+          $parent_array['parent'] = $this->get_parents($query->row_array());
+        }else{
+          return $parent_array['parent'];
+        }
+    }
+
+	function get_specials_list($customer_type){
+      $date = date("Y-m-d H:i:s");
+    	$query = $this->db->query("SELECT * FROM `products` WHERE customer_type = ? AND special_start <= '$date' AND special_end >= '$date'", array($customer_type));
+    	return $query->result_array();
+	}
+
+  function get_all_orders($limit=0,$count=20){
+
+    $date_from = $this->session->userdata('dashboard_date_from');
+    $date_to = $this->session->userdata('dashboard_date_to');
+
+    $query_string = "SELECT 
+    a.id as 'order_number',
+    b.company_name as 'customer', 
+    c.name as 'payment_type', 
+    a.status, 
+    a.delivery_date, 
+    a.createdate 
+    FROM 
+    `orders` as a, 
+    `customers` as b, 
+    `payment_types` as c 
+    WHERE 
+    a.customer_id = b.id AND 
+    a.payment_type = c.id AND 
+    a.createdate > '$date_from' AND 
+    a.createdate < '$date_to' ORDER by 
+    a.createdate desc";
+
+    $query = $this->db->query($query_string." LIMIT $limit,$count");
+    $return['results'] = $query->result_array();
+
+    foreach ($return['results'] as $key => $order) {
+      $items = $this->get_order_items($order['order_number']);
+      $return['results'][$key]['total'] = $items['total_amount'];
+      $return['results'][$key]['product_count'] = $items['total_products'];
+    }
+
+    $query1 = $this->db->query($query_string);
+    $return['num_rows'] = $query1->num_rows();
+    
+    $return['query'] = $query_string;
+
+    return $return;
+  }
+
+  function get_order_items($order_id){
+      $query = $this->db->query("SELECT * FROM `order_items` WHERE order_id = ?", array($order_id));
+      $result = $query->result_array();
+
+      $total_amount = 0;
+      $total_products = count($result);
+      
+      foreach ($result as $key => $item) {
+
+        $total_amount = $total_amount + ($item['price']*$item['quantity']);
+
+      }
+
+      return array('total_amount' => $total_amount, 'items' => $result, 'total_products' => $total_products);
+  }
+
+}
