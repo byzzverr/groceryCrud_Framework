@@ -1,0 +1,652 @@
+<?php
+
+defined('BASEPATH') OR exit('No direct script access allowed');
+
+// This can be removed if you use __autoload() in config.php OR use Modular Extensions
+require APPPATH . '/libraries/REST_Controller_Taptuck.php';
+
+/**
+ * This is an example of a few basic user interaction methods you could use
+ * all done with a hardcoded array
+ *
+ * @package         CodeIgniter
+ * @subpackage      Rest Server
+ * @category        Controller
+ * @author          Phil Sturgeon, Chris Kacerguis
+ * @license         MIT
+ * @link            https://github.com/chriskacerguis/codeigniter-restserver
+ */
+class Taptuck_basic extends REST_Controller_Taptuck {
+
+    function __construct()
+    {
+        // Construct the parent class
+        parent::__construct();
+
+        $this->load->library("Aauth");
+        $this->load->model('event_model');
+        $this->load->model('financial_model');
+        $this->load->model('user_model');
+        $this->load->model('taptuck_model');
+        $this->load->model('app_model');
+        $this->load->model('tt_parent_model');
+
+        // Configure limits on our controller methods
+        // Ensure you have created the 'limits' table and enabled 'limits' within application/config/rest.php
+        $this->methods['user_get']['limit'] = 500; // 500 requests per hour per user/key
+        $this->methods['user_post']['limit'] = 100; // 100 requests per hour per user/key
+        $this->methods['user_delete']['limit'] = 50; // 50 requests per hour per user/key
+    }
+
+    public function login_post()
+    {
+
+            $requestjson = file_get_contents('php://input');
+            $requestjson = json_decode($requestjson, true);
+
+
+        $this->app_model->save_raw_data(json_encode($requestjson),'api','taptuck_login');
+        if(isset($requestjson['email']) && isset($requestjson['password'])){
+            $this->aauth->login(trim($requestjson['email']), trim($requestjson['password']), FALSE, 'taptuck');
+
+               if ($this->aauth->is_loggedin()){
+
+                // store the raw data for future reference
+                    
+                $user_info = $this->aauth->get_user(); // remember this is an object not array.
+                $this->event_model->track('taptuck_login','app_login_successful', $user_info->username);
+
+                if(isset($requestjson['deviceId']) && $requestjson['deviceId'] != '' && $requestjson['deviceId'] != $user_info->push_token){
+                    $pt = array();
+                    $pt['push_token'] = $requestjson['deviceId'];
+                    $this->user_model->update_push_token($user_id, 'taptuck', $pt);
+                }
+
+                unset($user_info->pass);
+                unset($user_info->parent_id);
+                unset($user_info->banned);
+                unset($user_info->last_login);
+                unset($user_info->last_activity);
+                unset($user_info->last_login_attempt);
+                unset($user_info->forgot_exp);
+                unset($user_info->remember_time);
+                unset($user_info->remember_exp);
+                unset($user_info->verification_code);
+                unset($user_info->ip_address);
+                unset($user_info->login_attempts);
+                unset($user_info->cellphone);
+                unset($user_info->customer_id);
+                unset($user_info->default_app);
+                unset($user_info->distibutor_id);
+                unset($user_info->user_link_id);
+                unset($user_info->push_token);
+
+
+                $token = $this->user_model->generate_token($user_info->id, 'taptuck');
+                if(isset($requestjson['imei'])){
+                    $this->user_model->save_imei($user_info->id, $requestjson['imei']);
+                }
+
+                /*
+                GROUPS: [14] => 'TapTuckParent',
+                GROUPS: [15] => 'TapTuckMerchant',
+                GROUPS: [16] => 'TapTuckAdmin'
+                */
+
+                $data = $this->taptuck_model->populate_user($user_info);
+
+                $message = [
+                    'meta' => array( 'token' => $token,
+                                     'code' => 201
+                                     ),
+                    'success' => true,
+                    'data' => $data,
+                    'message' => 'Successfully logged in'
+                ];
+            }else{
+
+                $this->event_model->track('taptuck_login','app_login_attempt', $requestjson['email']);
+                $message = [
+                    'meta' => array( 'code' => 401, 'reason' => 'Incorrect email and password combination'),
+                    'success' => false,
+                    'data' => array()
+                ];
+            }
+        }else{
+
+            $message = [
+                'meta' => array( 'code' => 401, 'reason' => 'Data not received.'),
+                'success' => false, // Automatically generated by the model
+                'data' => array(),
+                'message' => 'Data not received.'
+            ];
+        }
+        if($message['success']){
+            $this->set_response($message, REST_Controller_Taptuck::HTTP_CREATED);
+        }else{
+            $this->set_response($message, REST_Controller_Taptuck::HTTP_UNAUTHORIZED);
+        }
+    }
+    
+    public function login_get()
+    {
+        // $this->some_model->update_user( ... );
+        $message = [
+            'success' => true, // Automatically generated by the model
+            'data' => array( 'username' => $this->post('username'),
+                             'password' => $this->post('password'),
+                             'imei' => $this->post('imei'),
+                             'method' => 'get',
+                             'token' => 'letsmakeiteasy'
+                             ),
+            'message' => 'Successfully logged in'
+        ];
+
+        $this->set_response($message, REST_Controller_Taptuck::HTTP_CREATED); // CREATED (201) being the HTTP response code
+    }
+
+
+
+    public function token_post()
+    {
+
+        $requestjson = file_get_contents('php://input');
+        $this->app_model->save_raw_data($requestjson,'api','update_push_token_post');
+        $requestjson = json_decode($requestjson, true);
+
+        $auth = $this->input->server('HTTP_AUTHORIZATION');
+        if($auth != '' && !empty($auth)){
+            $requestjson['token'] =  $auth;
+        }
+
+        if ($requestjson['token'] != '' && !empty($requestjson['token'])){
+            $this->load->model('user_model');
+            $user_id = $this->user_model->get_user_from_token($requestjson['token']);
+
+            if($user_id)
+            {
+                $app = 'taptuck';
+                $push_token = $requestjson['push_token'];
+
+                $user = $this->user_model->get_user_details($user_id);
+
+                $isThere = $this->user_model->get_user_in_pushtokens($app, $user_id);
+
+                if($isThere)
+                {
+                    $data['push_token'] = $push_token;
+                    $post = $this->user_model->update_push_token($user_id, $app, $data);
+
+                    if($post)
+                    {
+                        $message = [
+                        'success' => true, // Automatically generated by the model
+                        'data' => array(),
+                        'message' => "Your details have been successfully updated."
+                        ];
+                    }
+                    else
+                    {
+                        $message = [
+                        'success' => false, // Automatically generated by the model
+                        'data' => array(),
+                        'message' => "Unable to update new details."
+                        ];                        
+                    }
+                }
+                else
+                {
+                    $data['user_id'] = $user_id;
+                    $data['app'] = $app;
+                    $data['push_token'] = $push_token;
+                    $data['createdate'] = date('Y-m-d H:i:s');
+
+                    $insert = $this->user_model->insert_new_push_token($data);
+
+                    if($insert)
+                    {
+                        $message = [
+                        'success' => true, // Automatically generated by the model
+                        'data' => array(),
+                        'message' => "Your details have been successfully added."
+                        ];
+                    }
+                    else
+                    {
+                        $message = [
+                        'success' => false, // Automatically generated by the model
+                        'data' => array(),
+                        'message' => "Unable to update new details."
+                        ];                        
+                    }
+                }
+            }
+            else
+            {
+                $message = [
+                'success' => false, // Automatically generated by the model
+                'data' => array(),
+                'message' => "Token not valid."
+                ];
+            }
+        }
+        else
+        {
+
+            $message = [
+                'success' => false, // Automatically generated by the model
+                'data' => array(),
+                'message' => "Please post a valid token."
+            ];
+            
+        }        
+
+        if($message['success']){
+            $this->set_response($message, REST_Controller_Taptuck::HTTP_CREATED); 
+        }else{
+            $this->set_response($message, REST_Controller_Taptuck::HTTP_NOT_ACCEPTABLE); 
+        }
+    }
+
+
+    public function profile_update_post()
+    {
+
+        $requestjson = file_get_contents('php://input');
+        $requestjson = json_decode($requestjson, true);
+        $nopicture = $requestjson;
+        $nopicture['photo'] = 'removed for space reasons';
+        $this->app_model->save_raw_data(json_encode($nopicture),'api','profile_update');
+        $store_picture = '';
+
+        $auth = $this->input->server('HTTP_AUTHORIZATION');
+        if (!empty($auth) && $auth != ''){
+            $requestjson['token'] = $auth;
+        }
+
+        if ($requestjson['token'] != '' && !empty($requestjson['token'])){
+            $this->load->model('user_model');
+            $user_id = $this->user_model->get_user_from_token($requestjson['token']);
+            
+            if($user_id){
+
+                $user = $this->user_model->get_general_user($user_id);
+                $customer_id = $user->customer_id;
+
+                $error = false;
+                $message = '';
+                $date = date("Y-m-d H:i:s");
+
+                if(isset($requestjson['photo']) && $requestjson['photo'] != ''){
+                    $store_picture = 'store_front_' . $customer_id.'.jpg';
+                    $this->load->model('spazapp_model');
+                    $this->spazapp_model->base64_to_jpeg($requestjson['photo'], 'assets/uploads/customer/'.$store_picture);
+                    unset($requestjson['photo']);
+                    $requestjson['store_picture'] = $store_picture;
+                }
+
+                unset($requestjson['token']);
+
+                $expected_array = array(
+                    'first_name',
+                    'last_name',
+                    'id_number',
+                    'email',
+                    'password',
+                    'confirm_password',
+                    'company_name',
+                    'shop_type',
+                    'address',
+                    'suburb',
+                    'province',
+                    'location_long',
+                    'location_lat',
+                    'region_id',
+                    'store_picture'
+                    );
+
+                $accepted_array = array();
+                $rejected_array = array();
+
+                foreach ($requestjson as $key => $field) {
+                    if(in_array($key, $expected_array)){
+                        $accepted_array[$key] = $field;
+                    }else{
+                        $error = true;
+                        $rejected_array[] = $key;
+                    }
+                }
+                
+                if (!$error){
+                       
+                    $this->load->model('user_model');
+
+                    if(isset($accepted_array['first_name']) && isset($accepted_array['last_name'])){
+                        $accepted_array['name'] = $accepted_array['first_name'] . ' ' . $accepted_array['last_name'];
+                    }
+
+                    if(isset($accepted_array['password'])){
+                        $this->aauth->update_password($user_id, $accepted_array['password']);
+                    }
+
+                    $this->app_model->update_user($user_id, $accepted_array);
+                    $this->app_model->update_customer($customer_id, $accepted_array);
+                        
+                    $this->event_model->private_track_event($user_id, 'app', 'update_user', 'user updated', '', $date);
+
+                    $message = [
+                        'success' => true, // Automatically generated by the model
+                        'data' => array(),
+                        'message' => 'Successfully updated user.'
+                    ];
+
+                }else{
+                    $message = [
+                        'success' => false, // Automatically generated by the model
+                        'data' => array('illegal_array' => $rejected_array, 'expected_array' => $expected_array),
+                        'message' => "please only post fields from the expected array."
+                    ];
+                }
+            }else{
+                    $message = [
+                        'success' => false, // Automatically generated by the model
+                        'data' => array(),
+                        'message' => "Your Token has expired."
+                    ];
+                }
+        }else{
+                $message = [
+                    'success' => false, // Automatically generated by the model
+                    'data' => array(),
+                    'message' => "Please post a valid token."
+                ];
+            }
+
+        $this->set_response($message, REST_Controller_Taptuck::HTTP_CREATED); // CREATED (201) being the HTTP response code
+    }
+    
+     public function promotions_post()
+    {
+        $this->app_model->save_raw_data(json_encode($_REQUEST),'api','promotions');
+        $promotions = $this->app_model->get_promotions();
+        $message = [
+            'success' => true, // Automatically generated by the model
+            'data' => array('promotions' => $promotions, 'count' => count($promotions)),
+            'message' => 'generated list of promotions with count'
+        ];
+
+        $this->set_response($message, REST_Controller_Taptuck::HTTP_CREATED); // CREATED (201) being the HTTP response code
+    }
+    
+    public function add_parent_post()
+    
+      {
+
+        $this->load->helper('email');
+
+        $error = false;
+        $message = '';
+
+        $requestjson = file_get_contents('php://input');
+        $requestjson = json_decode($requestjson, true);
+
+        $expected_array = array(
+            'email',
+            'cellphone',
+            'first_name',
+            'last_name',
+            'password'
+            );
+
+        foreach ($expected_array as $field) {
+            if(!isset($requestjson[$field])){
+                $error = true;
+                $message = "Could not find '$field' in post array";
+            }
+        }
+
+        if (!$error){
+            if(strlen($requestjson['cellphone']) == 10){
+
+                $zero = substr($requestjson['cellphone'],0, -9);
+
+                if(!$zero == 0){
+                    $error = true;
+                    $message = "Please supply a valid cell number starting with 0.";
+                }
+
+            }else{
+                $error = true;
+                $message = "Please supply a valid cell number starting with 0.";
+            }
+        }
+
+        if (!$error){
+            if(!valid_email($requestjson['email'])){
+                $error = true;
+                $message = "Please supply a valid email address.";
+            }
+
+            if (!$error){
+                if(!$this->taptuck_model->unique_email($requestjson['email'])){
+                    $error = true;
+                    $message = "This email is already in use.";
+                }
+            }
+        }
+
+        if (!$error){
+
+            $message = array('success' => false);
+
+            // store the raw data for future reference
+            $this->app_model->save_raw_data(json_encode($requestjson),'api','add_parent');
+                
+            $this->load->model('user_model');
+
+            $requestjson['name'] = $requestjson['first_name'] . ' ' . $requestjson['last_name'];
+
+            $otp=$this->app_model->generateRandomNumber();
+            $requestjson['otp']=$otp;
+
+            $new_user_id = $this->aauth->create_user($requestjson['cellphone'],$requestjson['password'],$requestjson['name'],$requestjson['cellphone'],14,$requestjson['otp']);
+            $errors = $this->aauth->get_errors_array();
+
+            if(is_array($errors) && count($errors) >= 1){
+                $this->event_model->track('taptuck_app','registration_attempt', $errors[0]);
+                $this->event_model->track('taptuck_user','attempted_add_user', $errors[0]);
+                $message = [
+                        'success' => false, // Automatically generated by the model
+                        'data' => array(),
+                        'message' => $errors[0]
+                    ];
+            }else{
+                $requestjson['user_id'] = $new_user_id;
+                $parent_id = $this->tt_parent_model->create_parent($requestjson);
+
+                if(valid_email($requestjson['email'])){
+                    $this->app_model->update_user_email($new_user_id,$requestjson['email']);
+                }
+
+                $this->app_model->update_user_app($new_user_id,'taptuck');
+                $parent = $this->tt_parent_model->get_tt_parent($new_user_id, $requestjson['cellphone']);
+
+                $this->event_model->track('taptuck_user','add_user', $new_user_id);
+                $this->event_model->track('taptuck_app','registration');
+
+                $login_result = $this->aauth->login_fast($new_user_id);
+
+               if ($this->aauth->is_loggedin()){
+
+  // store the raw data for future reference
+                        
+                    $user_info = $this->aauth->get_user(); // remember this is an object not array.
+                    $this->event_model->track('taptuck_login','app_login_successful', $user_info->username);
+
+                    unset($user_info->pass);
+                    unset($user_info->parent_id);
+                    unset($user_info->banned);
+                    unset($user_info->last_login);
+                    unset($user_info->last_activity);
+                    unset($user_info->last_login_attempt);
+                    unset($user_info->forgot_exp);
+                    unset($user_info->remember_time);
+                    unset($user_info->remember_exp);
+                    unset($user_info->verification_code);
+                    unset($user_info->ip_address);
+                    unset($user_info->login_attempts);
+                    unset($user_info->cellphone);
+                    unset($user_info->customer_id);
+                    unset($user_info->default_app);
+                    unset($user_info->distibutor_id);
+                    unset($user_info->user_link_id);
+                    unset($user_info->push_token);
+
+
+                    $token = $this->user_model->generate_token($user_info->id);
+                    if(isset($requestjson['imei'])){
+                        $this->user_model->save_imei($user_info->id, $requestjson['imei']);
+                    }
+
+                    /*
+                    GROUPS: [14] => 'TapTuckParent',
+                    GROUPS: [15] => 'TapTuckMerchant',
+                    GROUPS: [16] => 'TapTuckAdmin'
+                    */
+
+                    $data = $this->taptuck_model->populate_user($user_info);
+                    $data['banned'] = 1;
+                    $data['otp'] = $requestjson['otp'];
+
+                    $message = [
+                        'meta' => array( 'token' => $token,
+                                         'code' => 201
+                                         ),
+                        'success' => true, // Automatically generated by the model
+                        'data' => $data,
+                        'message' => 'Successfully registered. Please login'
+                    ];
+
+                }else{
+
+                    $message = [
+                        'success' => false, // Automatically generated by the model
+                        'data' => array(),
+                        'message' => 'An error occurred on login.'
+                    ];
+
+                }
+            }
+
+        }else{
+            $message = [
+                'success' => false, // Automatically generated by the model
+                'data' => array(),
+                'message' => $message
+            ];
+        }
+
+        if($message['success']){
+            $this->set_response($message, REST_Controller_Taptuck::HTTP_CREATED);
+        }else{
+            $this->set_response($message, REST_Controller_Taptuck::HTTP_UNAUTHORIZED);
+        }
+    }
+    
+    
+    
+    public function update_password_post()
+    {
+
+            $requestjson = file_get_contents('php://input');
+            $requestjson = json_decode($requestjson, true);
+            if(isset($requestjson['username']) && isset($requestjson['password'])){
+                $this->aauth->login(trim($requestjson['username']), trim($requestjson['password']));
+
+                if ($this->aauth->is_loggedin()){
+
+                    $username = $requestjson['username'];
+                    $user_info = $this->aauth->get_user(); // remember this is an object not array.
+              
+                    $new_password = trim($requestjson['password']);
+                    $hashed_password = $this->aauth->hash_password($new_password, $user_info->id);
+                    $this->user_model->update_password($user_info->id,$hashed_password);
+                    
+                    $message = "Password updated Successfully.";
+                    $success = true;
+                
+
+                }else{
+
+                    $message = "Username and password combination invalid.";
+                    $success = false;
+                }
+            }else{
+
+                    $message = "Please provide username and password.";
+                    $success = false;
+                }
+        
+
+        $message = [
+            'success' => $success, // Automatically generated by the model
+            'data' => array(),
+            'message' => $message
+        ];
+   
+
+        $this->set_response($message, REST_Controller_Taptuck::HTTP_CREATED); // CREATED (201) being the HTTP response code
+    }
+
+     public function keepalive_post()
+    {
+
+        $requestjson = file_get_contents('php://input');
+        $this->app_model->save_raw_data($requestjson,'api','tt_keepalive');
+        $requestjson = json_decode($requestjson, true);
+
+        $message = [
+            'success' => false, // Automatically generated by the model
+            'data' => array(),
+            'message' => 'no token found'
+        ];
+
+        if ($requestjson['token'] != '' && !empty($requestjson['token'])){
+            $this->load->model('user_model');
+            $user_id = $this->user_model->get_user_from_token($requestjson['token']);
+            if($user_id){
+                if(isset($requestjson['long']) && isset($requestjson['lat'])){
+                    $this->app_model->store_long_lat($user_id, $requestjson['long'],$requestjson['lat']);
+                }
+                $message = [
+                    'success' => true, // Automatically generated by the model
+                    'data' => array(),
+                    'message' => 'Token expiry has been updated'
+                ];
+            }else{
+                $message = [
+                    'success' => false, // Automatically generated by the model
+                    'data' => array(),
+                    'message' => 'Token invalid or expired'
+                ];
+            }
+            
+        }
+
+        $this->set_response($message, REST_Controller_Taptuck::HTTP_CREATED); // CREATED (201) being the HTTP response code
+
+    }
+
+    public function keepalive_get()
+    {
+        // $this->some_model->update_user( ... );
+        $message = [
+            'success' => true, // Automatically generated by the model
+            'data' => array(),
+            'message' => 'Do the monkey with me!'
+        ];
+
+        $this->set_response($message, REST_Controller_Taptuck::HTTP_CREATED); // CREATED (201) being the HTTP response code
+    }
+    
+}

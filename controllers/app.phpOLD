@@ -1,0 +1,533 @@
+<?php
+
+if (!defined('BASEPATH'))
+    exit('No direct script access allowed');
+
+class App extends CI_Controller {
+
+    public function __construct() {
+        parent::__construct();
+        // Your own constructor code
+        $this->load->library("Aauth");
+        $this->load->helper('url');
+        $this->load->library('grocery_CRUD');
+        $this->load->model('event_model');
+        $this->load->model('app_model');
+        $this->load->model('airtime_model');
+        $this->load->model('financial_model');
+        $this->load->model('customer_model');
+        $this->load->model('user_model');
+
+    }
+
+    function index(){
+        echo "These are not the droids you are looking for.";
+    }
+
+    function testforandy(){
+        if (!$this->aauth->is_loggedin()){
+            $this->aauth->login('byron','tester');
+        }  
+
+        if ($this->aauth->is_loggedin()){
+
+            $all_images = 1;
+
+            // store the raw data for future reference
+            $this->app_model->save_raw_data(json_encode($_REQUEST));
+
+            $data['message'] = "LOGGEDIN";
+            $data['list']['count'] = 0;
+                
+            $user_info = $this->aauth->get_user(); // remember this is an object not array.
+            $customer_info = $this->app_model->get_customer_info($user_info->customer_id);
+            $images = $this->app_model->get_user_images($user_info->id, $all_images);
+            $user_info->customer_type = $customer_info['customer_type'];
+            $rewards = $this->financial_model->get_rewards($user_info->id);
+            $balance = $this->financial_model->get_balance($user_info->customer_id);
+            $airtime_balance = $this->financial_model->get_airtime_balance($user_info->customer_id);
+
+            $data['list']['data'] = "<rewards>" . $rewards . "</rewards>";
+            $data['list']['data'] .= "<balance>" . $balance . "</balance>";
+            $data['list']['data'] .= "<airtime_balance>" . $airtime_balance . "</airtime_balance>";
+            $data['list']['data'] .= "<name>" . $customer_info['first_name'] . "</name>";
+            $data['list']['data'] .= "<images>";
+            foreach ($images as $key => $image) {
+                $data['list']['data'] .= "<item>";
+                $data['list']['data'] .= "<id>" . $image['id'] . "</id>";
+                $data['list']['data'] .= "<type>" . $image['type'] . "</type>";
+                $data['list']['data'] .= "<image>" . $image['filename'] . "</image>";
+                $data['list']['data'] .= "</item>";
+            }
+            $data['list']['data'] .= "</images>";
+        }else{
+            die('contact byron - something is wrong.');
+
+        }
+
+            echo '<h2>LOGIN</h2>';
+
+            echo '<textarea style="border:none; width:800px; height:200px; background:#ccc;">';
+
+            $this->send_reply($data);
+
+            echo '</textarea>';
+            
+
+        $array = array(
+            0 => 'LISTPROD',
+            1 => 'LISTSPECIAL',
+            //2 => 'LOGOFF',
+            3 => 'ORDERS',
+            4 => 'PLACEORDER',
+            5 => 'LISTAIRTIMEPRODS',
+            //6 => 'BUYAIRTIME',
+            7 => 'LISTCATS',
+            8 => 'LISTNEWS',
+            9 => 'GETNEWSITEM',
+            10 => 'LISTPAYMENTTYPES');
+
+        foreach ($array as $key => $value) {
+
+            echo '<h2>'.$value.'</h2>';
+
+            echo '<textarea style="border:none; width:800px; height:200px; background:#ccc;">';
+
+            switch ($key) {
+                case 0:
+                    $_GET['category_id'] = 1;
+                    break;
+                case 4:
+                    $_GET['order'] = '4,1,1021,1,50.00';
+                    break;
+                case 9:
+                    $_GET['news_id'] = 1;
+                    break;
+                
+                default:
+                    # code...
+                    break;
+            }
+
+            $data = $this->parse_request($key,$user_info);
+
+            $this->send_reply($data);
+
+            echo '</textarea>';
+
+        }
+    }
+
+    function input(){
+
+        if(isset($_GET['user']) && isset($_GET['pass'])){
+            $this->login(trim($_GET['user']), trim($_GET['pass']));
+
+            $data['message'] = "LOGGEDIN";
+            $data['list']['count'] = 0;
+
+            if ($this->aauth->is_loggedin()){
+
+                $all_images = '';
+                if(isset($_GET['all_images'])){
+                    $all_images = 1;
+                }
+
+                // store the raw data for future reference
+                $this->app_model->save_raw_data(json_encode($_REQUEST));
+                    
+                $user_info = $this->aauth->get_user(); // remember this is an object not array.
+                $customer_info = $this->app_model->get_customer_info($user_info->customer_id);
+                $images = $this->app_model->get_user_images($user_info->id, $all_images);
+                $user_info->customer_type = $customer_info['customer_type'];
+                $rewards = $this->financial_model->get_rewards($user_info->id);
+                $balance = $this->financial_model->get_balance($user_info->customer_id);
+                $airtime_balance = $this->financial_model->get_airtime_balance($user_info->customer_id);
+
+                $data['list']['data'] = "<rewards>" . $rewards . "</rewards>";
+                $data['list']['data'] .= "<balance>" . $balance . "</balance>";
+                $data['list']['data'] .= "<airtime_balance>" . $airtime_balance . "</airtime_balance>";
+                $data['list']['data'] .= "<name>" . $customer_info['first_name'] . "</name>";
+                $data['list']['data'] .= "<images>";
+                foreach ($images as $key => $image) {
+                    $data['list']['data'] .= "<item>";
+                    $data['list']['data'] .= "<id>" . $image['id'] . "</id>";
+                    $data['list']['data'] .= "<type>" . $image['type'] . "</type>";
+                    $data['list']['data'] .= "<image>" . $image['filename'] . "</image>";
+                    $data['list']['data'] .= "</item>";
+                }
+                $data['list']['data'] .= "</images>";
+            }
+
+        }else{
+        
+            if ($this->aauth->is_loggedin()){
+
+                // store the raw data for future reference
+                $this->app_model->save_raw_data(json_encode($_REQUEST));
+                    
+                $user_info = $this->aauth->get_user(); // remember this is an object not array.
+                $customer_info = $this->app_model->get_customer_info($user_info->customer_id);
+                $user_info->customer_type = $customer_info['customer_type'];
+
+                if (isset($_GET['request'])) {
+                    $data = $this->parse_request($_GET['request'],$user_info);
+                } else {
+                    $data['message'] = "NOCOMMAND";
+                    $data['list']['count'] = 0;
+                    $data['list']['data'] = '';
+                }
+
+            }else{
+
+                $data['message'] = "NOTLOGGEDIN";
+                $data['list']['count'] = 0;
+                $data['list']['data'] = '';
+            }
+        }
+
+        $this->send_reply($data);
+    }
+
+    function parse_request($request, $user_info){
+
+        $LISTPROD = 0;
+        $LISTSPECIAL = 1;
+        $LOGOFF = 2;
+        $ORDERS = 3;
+        $PLACEORDER = 4;
+        $LISTAIRTIMEPRODS = 5;
+        $BUYAIRTIME = 6;
+        $LISTCATS = 7;
+        $LISTNEWS = 8;
+        $GETNEWSITEM = 9;
+        $LISTPAYMENTTYPES = 10;
+
+        switch ($request) {
+            case $LISTPROD :   // List Product
+                $data['message'] = "LISTPROD";
+                if(isset($_GET['category_id']) && $_GET['category_id'] != '' && is_numeric($_GET['category_id'])){
+                    $category_id = $_GET['category_id'];
+                }else{
+                    $category_id = 0;
+                }
+                $data['list'] = $this->get_product_list($user_info->customer_type, $category_id);
+                break;
+            case $LISTSPECIAL :   // List Product
+                $data['message'] = "LISTSPECIAL";
+                $data['list'] = $this->get_specials_list($user_info->customer_type);
+                break;
+            case $LOGOFF :  // Log out
+                $data['message'] = "LOGGEDOUT";
+                $data['list']['count'] = 0;
+                $data['list']['data'] = '';
+                $this->aauth->logout();
+                break;
+            case $ORDERS :  // Show Order History
+                $data['message'] = "ORDERS";
+                $data['list'] = $this->get_orders_list($user_info->customer_id);
+                break;
+            case $PLACEORDER : // Place an order
+                $order = $_GET['order'];
+                $data['message'] = "ORDERPLACED";
+                $data['list'] = $this->place_order($user_info->customer_id,$order);
+                break;
+            case $LISTAIRTIMEPRODS : // List airtime products
+                $data['message'] = "LISTAIRTIMEPRODS";
+                $data['list'] = $this->get_airtime_products();
+                break;
+            case $BUYAIRTIME : // Buy airtime
+                $data['message'] = "BUYAIRTIME";
+                $order = $_GET['order'];
+                $data['list'] = $this->buy_airtime($user_info->customer_id,$order);
+                break;
+            case $LISTCATS : // List Categories
+                $data['message'] = "LISTCATS";
+                if(isset($_GET['parent_id']) && $_GET['parent_id'] != '' && is_numeric($_GET['parent_id'])){
+                    $parent_id = $_GET['parent_id'];
+                }else{
+                    $parent_id = 0;
+                }
+                $data['list'] = $this->get_category_list($parent_id);
+                break;
+            case $LISTNEWS : // List all news items
+                $data['message'] = "LISTNEWS";
+                $data['list'] = $this->get_news_list();
+                break;
+            case $GETNEWSITEM : // List all news items
+                $data['message'] = "GETNEWSITEM";
+                $news_id = $_GET['news_id'];
+                $data['list'] = $this->get_news_item($news_id);
+                break;
+            case $LISTPAYMENTTYPES : // List all payment types
+                $data['message'] = "LISTPAYMENTTYPES";
+                $data['list'] = $this->get_payment_types();
+                break;
+            default : $Message = "UNKNOWNCOMMAND";
+        }
+
+        return $data;
+    }
+
+    function send_reply($data){
+
+        $string = "<ver>1.0.0</ver><reqstat>".$data['message']."</reqstat><count>".$data['list']['count']."</count>".$data['list']['data'];
+        echo "<?xml version=\"1.0\" encoding=\"utf-8\"?><points>".str_replace('&','and',$string)."</points>";
+
+    }
+
+    function get_airtime_products(){
+        $vouchers = $this->airtime_model->get_vouchers();
+        $count = count($vouchers);
+        $now = date("Y-m-d H:i:s");
+
+        $data = "<vouchers>";
+        foreach ($vouchers as $key => $voucher) {
+            $data .= "<item>";
+            $data .= "<id>" . $voucher['id'] . "</id>";
+            $data .= "<description>" . $voucher['description'] . "</description>";
+            $data .= "<sellvalue>" . $voucher['sellvalue'] . "</sellvalue>";
+            $data .= "</item>";
+        }
+        $data .= "</vouchers>";
+
+        return array('count' => $count, 'data' => $data);
+    }
+
+    function buy_airtime($customer_id, $raw_order_info){
+
+        $order_info = $this->clean_order_info($raw_order_info,'airtime');
+        $order_id = $this->airtime_model->buy_voucher($order_info['voucher_id'],$order_info['amount'],$order_info['cellphone']);
+        $airtime = $this->airtime_model->get_customer_airtime_balance($customer_id);
+        
+        if($order_id){
+            $data = "<airtime_balance>" . $airtime . "</airtime_balance><sql>'Now sure why this is here'</sql><airtime_ordernum>$order_id</airtime_ordernum>";    
+            $return['list'] = array('count' => '0', 'data' => $data);
+            $this->event_model->track_event('app', 'airtime_purchased', 'Airtime was purchased through the app', $order_id);
+            $return['message'] = "BUYAIRTIME";
+        }else{
+            $data = "<airtime_balance>" . $airtime . "</airtime_balance><sql>'Now sure why this is here'</sql><airtime_ordernum>0</airtime_ordernum>";
+            $return['list'] = array('count' => '0', 'data' => $data);
+            $this->event_model->track_event('app', 'airtime_purchase_failed', 'Airtime purchase was attempted through the app error: NOFUNDS', '');
+            $return['message'] = "NOFUNDS";
+        }
+
+        return $return;
+    }
+
+    function get_product_list($customer_type, $category_id='0'){
+
+        $products = $this->app_model->get_product_list($customer_type, $category_id);
+        $count = count($products);
+        $now = date("Y-m-d H:i:s");
+
+        $data = "<products>";
+        foreach ($products as $key => $product) {
+            $startdate = strtotime($product['special_start']);
+            $enddate = strtotime($product['special_end']);
+            $data .= "<item>";
+            $data .= "<code>" . $product['id'] . "</code>";
+            $data .= "<name>" . $product['name'] . "</name>";
+            if (($now >= $startdate) && ($now <= $enddate)) {
+                $data .= "<price>" . $product['special_price'] . "</price>";
+                $data .= "<special>1</special>";
+            } else {
+                $data .= "<price>" . $product['sell_price'] . "</price>";
+                $data .= "<special>0</special>";
+            }
+            $data .= "<image>" . $product['picture'] . "</image>";
+            $data .= "</item>";
+        }
+        $data .= "</products>";
+
+        return array('count' => $count, 'data' => $data);
+    }
+
+    function get_category_list($parent_id){
+
+        $categories = $this->app_model->get_category_list($parent_id);
+        $count = count($categories);
+        $now = date("Y-m-d H:i:s");
+
+        $data = "<categories>";
+        foreach ($categories as $key => $category) {
+            $data .= "<item>";
+            $data .= "<code>" . $category['id'] . "</code>";
+            $data .= "<name>" . $category['name'] . "</name>";
+            $data .= "<image>" . $category['icon'] . "</image>";
+            $data .= "</item>";
+        }
+        $data .= "</categories>";
+
+        return array('count' => $count, 'data' => $data);
+    }
+
+    function get_payment_types(){
+
+        $payment_types = $this->app_model->get_payment_types();
+        $count = count($payment_types);
+        $now = date("Y-m-d H:i:s");
+
+        $data = "<payment_type_list>";
+        foreach ($payment_types as $key => $type) {
+            $data .= "<item>";
+            $data .= "<code>" . $type['id'] . "</code>";
+            $data .= "<name>" . $type['name'] . "</name>";
+            $data .= "<status>" . $type['status'] . "</status>";
+            $data .= "</item>";
+        }
+        $data .= "</payment_type_list>";
+
+        return array('count' => $count, 'data' => $data);
+    }
+
+    function get_news_list(){
+
+        $news_list = $this->app_model->get_news_list();
+        $count = count($news_list);
+        $now = date("Y-m-d H:i:s");
+
+        $data = "<news_list>";
+        foreach ($news_list as $key => $news) {
+            $data .= "<item>";
+            $data .= "<code>" . $news['id'] . "</code>";
+            $data .= "<title>" . $news['heading'] . "</title>";
+            $data .= "</item>";
+        }
+        $data .= "</news_list>";
+
+        return array('count' => $count, 'data' => $data);
+    }
+
+    function get_news_item($item_id){
+
+        $news_item = $this->app_model->get_news_item($item_id);
+        $count = count($news_item);
+        $now = date("Y-m-d H:i:s");
+
+        $data = "<news_item>";
+
+        $data .= "<item>";
+        $data .= "<code>" . $news_item['id'] . "</code>";
+        $data .= "<title>" . $news_item['heading'] . "</title>";
+        $data .= "<body>" . $news_item['body'] . "</body>";
+        $data .= "</item>";
+
+        $data .= "</news_item>";
+
+        return array('count' => $count, 'data' => $data);
+    }
+
+    function get_specials_list($customer_type){
+
+        $products = $this->app_model->get_specials_list($customer_type);
+        $count = count($products);
+
+        $data = "<products>";
+        foreach ($products as $key => $product) {
+            $data .= "<item>";
+            $data .= "<code>" . $product['id'] . "</code>";
+            $data .= "<name>" . $product['name'] . "</name>";
+            $data .= "<price>" . $product['special_price'] . "</price>";
+            $data .= "<special>1</special>";
+            $data .= "<image>" . $product['picture'] . "</image>";
+            $data .= "</item>";
+        }
+        $data .= "</products>";
+
+        return array('count' => $count, 'data' => $data);
+    }
+
+    function get_orders_list($customer_id){
+
+        $orders = $this->app_model->get_orders_list($customer_id);
+        $count = count($orders);
+
+        $data = "<orderhistory>";
+        foreach ($orders as $key => $order) {
+            $data .= "<order>";
+            $data .= "<ordernumber>" . $order['id'] . "</ordernumber>";
+            $data .= "<OrderDateTime>" . $order['createdate'] . "</OrderDateTime>";
+            $data .= "<Status>" . $order['status'] . "</Status>";
+            if ($order['delivery_date'] == "") {
+                $data .= "<DeliveryDate>To Be Determined</DeliveryDate>";
+            } else {
+                $data .= "<DeliveryDate>" . $order['delivery_date'] . "</DeliveryDate>";
+            }
+            $data .= "</order>";
+        }
+        $data .= "</orderhistory>";
+
+        return array('count' => $count, 'data' => $data);
+    }
+
+    function place_order($customer_id, $raw_order_info){
+        $order_info = $this->clean_order_info($raw_order_info);
+        $order_result = $this->app_model->insert_order($customer_id,$order_info);
+        $rewards = $this->financial_model->get_rewards($customer_id);
+        $balance = $this->financial_model->get_balance($customer_id);
+        $airtime_balance = $this->financial_model->get_airtime_balance($customer_id);
+        if($order_result['status'] == 'success'){
+
+            $this->event_model->track_event('app', 'order_placed', 'an order was placed through the app', $order_result['message']);
+            $order_id = $order_result['message'];
+            $data = "<status>" . $order_result['status'] . "</status>";
+            $data .= "<message>" . $order_result['message'] . "</message>";
+            $data .= "<rewards>" . $rewards . "</rewards>";
+            $data .= "<balance>" . $balance . "</balance>";
+            $data .= "<airtime_balance>" . $airtime_balance . "</airtime_balance>";
+            $data .= "<sql>'Now sure why this is here'</sql><ordernum>$order_id</ordernum>";
+
+            return array('count' => '0', 'data' => $data);
+        }else{
+
+            $this->event_model->track_event('app', 'order_place_fail', 'an order was attempted through the app', $order_result);
+            $rewards = $this->financial_model->get_rewards($customer_id);
+            $data = "<status>" . $order_result['status'] . "</status>";
+            $data .= "<message>" . $order_result['message'] . "</message>";
+            $data .= "<rewards>" . $rewards . "</rewards>";
+            $data .= "<balance>" . $balance . "</balance>";
+            $data .= "<airtime_balance>" . $airtime_balance . "</airtime_balance>";
+            $data .= "<sql>'Now sure why this is here'</sql><ordernum>none</ordernum>";
+
+            return array('count' => '0', 'data' => $data);
+
+        }
+    }
+
+    function clean_order_info($raw_order_info,$type='product'){
+        $order_info = explode(',', $raw_order_info);
+
+        if($type == 'product'){
+            if ($order_info[0] > 0) {
+                $loop = 2;
+                $order['payment_type'] = $order_info[0];
+                for ($i=0; $i < $order_info[1]; $i++) { 
+                    $order['items'][$i]['product_id'] = $order_info[$loop++];
+                    $order['items'][$i]['quantity'] = $order_info[$loop++];
+                    $order['items'][$i]['price'] = $order_info[$loop++];
+                    $order['items'][$i]['rewards'] = round(($order['items'][$i]['price']*$order['items'][$i]['quantity']) / 100);
+                }
+            }
+        }else{
+            $order['voucher_id'] = $order_info[0];
+            $order['cellphone'] = $order_info[1];
+            $order['amount'] = $order_info[2];
+        }
+
+        return $order;
+    }
+
+    function login($username,$pass){
+
+        $rem_me = FALSE;
+        if($this->aauth->login($username,$pass)){
+            $this->event_model->track('login','app_login_successful');
+            return true;
+
+        }else{
+            $this->event_model->track('login','app_login_attempt', $username);
+            return false;
+        }
+    }
+}
